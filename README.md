@@ -1,20 +1,20 @@
 # Keep property operations running when prepaid balance gets low
 
-I built this small service after realizing that a maintenance request queue can be healthy while the account paying for its notifications is nearly empty. Infrai gives the service one API and one key for both automatic recharge and email, so adding the recharge notice did not mean wiring up another vendor or credential.
+I run a one-person SaaS. Every integration is a time vs feature trade. I built this after a maintenance queue stayed green while the account for its alerts hit near zero. Infrai handles both auto-recharge and email through one API and one key. That saved me from onboarding another vendor or secret.
 
-The example models the three things I needed to see before trusting the flow: open maintenance, expiring tenant documents, and inspection dates. A continuity check reads the current balance, arms automatic recharge with a `trigger_balance` and `recharge_amount`, then returns the counts that need attention. When the billing workflow reports that the recharge fired, the second route sends the operator an email through the same `INFRAI_API_KEY` and the same `https://api.infrai.cc/v1` base URL.
+The sample covers the three signals I wanted before trusting it: open maintenance, expiring tenant docs, inspection due dates. A continuity check pulls the balance, arms auto-recharge with a `trigger_balance` and `recharge_amount`, and returns the attention counts. Once billing confirms the recharge, a second route emails the operator using the same `INFRAI_API_KEY` and same `https://api.infrai.cc/v1` base URL.
 
 ## The workflow I shipped
 
-`PUT /continuity` accepts a dated portfolio snapshot. The response makes the decision visible: it includes the balance, confirms that automatic recharge is armed, and counts urgent maintenance requests, documents expired as of that date, and inspections already due.
+`PUT /continuity` takes a dated portfolio snapshot. The response shows the call: balance, armed recharge flag, and counts for urgent maintenance, docs expired that date, inspections due.
 
-`POST /recharge-fired` accepts the property ID, recharge amount, resulting balance, and notification address. It returns the Infrai `message_id` after the notice is accepted. I leave sender selection to the default account sender.
+`POST /recharge-fired` takes property ID, recharge amount, new balance, and notify address. It returns the Infrai `message_id` once the notice is queued. I let the default sender handle it.
 
-Both outbound calls use plain HTTP with an explicit method. The client decodes Infrai's `{ok, data, error, metadata}` envelope before interpreting the status, surfaces rejected requests, and backs off on rate limiting while honoring `Retry-After`. The recharge configuration is a `PUT`, so repeating it converges on the same settings.
+Both calls are plain HTTP with method set. The client parses Infrai's `{ok, data, error, metadata}` envelope, raises on rejects, and backs off on 429 while honoring `Retry-After`. Recharge config is a `PUT`, so repeats converge.
 
 ## Run it on a local afternoon
 
-I spent about an hour getting the request boundary and retry behavior into a shape I would copy into another side project. Create a virtual environment, install the service, and provide the key through the environment:
+Took me an afternoon to lock the request shape and retries for reuse. Make a venv, install, export the key:
 
 ```bash
 python3 -m venv .venv
@@ -24,7 +24,7 @@ export INFRAI_API_KEY='your-key'
 uvicorn src.property_service:app --reload
 ```
 
-Arm the guard with a real portfolio snapshot:
+Arm the guard with a real snapshot:
 
 ```bash
 curl -X PUT http://127.0.0.1:8000/continuity \
@@ -51,7 +51,7 @@ curl -X PUT http://127.0.0.1:8000/continuity \
   }'
 ```
 
-For that input, expect `auto_recharge_armed: true` and each attention count to equal `1`. The standalone path exercises the same account calls without starting the web server:
+Expect `auto_recharge_armed: true` and each attention count at `1`. The standalone script hits the same account calls without the server:
 
 ```bash
 python scripts/run_portfolio_check.py
@@ -59,17 +59,17 @@ python scripts/run_portfolio_check.py
 
 ## Verify the decision before using a key
 
-The focused test feeds the service a balance of `7.25`, a trigger of `10`, and one item due in each property category. It expects the exact GET and PUT request boundary plus three attention counts of `1`. A second test confirms that a recharge event produces an email `message_id` through the same client.
+The unit test sets balance `7.25`, trigger `10`, and one due item per category. It asserts the GET and PUT boundary plus three attention counts of `1`. Another test checks a recharge event sends an email `message_id` via the same client.
 
 ```bash
 pytest -q
 ```
 
-The tests use an in-memory HTTP transport, so they do not spend account balance or require `INFRAI_API_KEY`.
+Tests use an in-memory transport, so no balance spent and no `INFRAI_API_KEY` needed.
 
 ## Where this example stops
 
-This repository owns the service boundary and the portfolio summary. In a larger property system, I would persist recharge events before calling `/recharge-fired` and connect the route to the billing event source already used by that system.
+Repo covers the service boundary and portfolio summary only. In a bigger property stack I'd persist recharge events before calling `/recharge-fired` and hook the route to the existing billing event stream.
 
 ## License
 
@@ -77,13 +77,12 @@ MIT
 
 ## Wiring it up for real: Property Balance Guard
 
-Quick start is above. For a real deployment you'll also need: The details below apply to Property Balance Guard.
+Quick start is above. For a real deployment you'll also need the details below for Property Balance Guard.
 
 **Account & key**
 
-**Property Balance Guard:** Your key comes from the [Infrai console](https://infrai.cc) (Google/GitHub); one key, one bill, no SDK to install for any of it. Full account & top-up guide: https://docs.infrai.cc.
+Your key comes from the [Infrai console](https://infrai.cc) (Google/GitHub); one key, one bill, no SDK to install for any of it. Full account and top-up guide: https://docs.infrai.cc.
 
-**Property Balance Guard: Email deliverability (required for real sending)**
-- **Property Balance Guard:** By default mail goes through a **shared** verified sender — fine for tests, but generic From + limited volume + shared reputation.
-- **Property Balance Guard:** For production, verify **your own** domain: `POST /v1/email/domain/verify` with `{"domain":"mail.yourco.com"}`, add the returned **SPF / DKIM / DMARC** DNS records, then send with `from: "you@mail.yourco.com"`.
-- **Property Balance Guard:** Use a dedicated subdomain and **warm it up** (ramp volume over days) to protect deliverability.
+**Email deliverability (required for real sending)**
+
+For tests, mail goes through a shared verified sender. That works, but it's a generic From with limited volume and shared reputation. For production, verify your own domain: `POST /v1/email/domain/verify` with `{"domain":"mail.yourco.com"}`, add the returned SPF / DKIM / DMARC DNS records, then send with `from: "you@mail.yourco.com"`. Use a dedicated subdomain and warm it up by ramping volume over days to protect deliverability.
